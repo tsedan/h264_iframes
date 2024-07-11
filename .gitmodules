@@ -1,3 +1,0 @@
-[submodule "h264bitstream"]
-	path = h264bitstream
-	url = https://github.com/tsedan/h264bitstream.git
