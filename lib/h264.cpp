@@ -106,7 +106,33 @@ int hstream_type(void *stream) {
   return nal_unit_type;
 }
 
-int hstream_get(void *stream, char *dest, size_t length) {
+ssize_t hstream_size(void *stream) {
+  hstream *st = (hstream *)stream;
+  if (!st || st->unit.empty())
+    return -1;
+
+  // Determine the NAL start code length
+  size_t nal_start_code_length = 3;
+  if (st->unit.size() > 4 && st->unit[0] == 0x00 && st->unit[1] == 0x00 &&
+      st->unit[2] == 0x00 && st->unit[3] == 0x01) {
+    nal_start_code_length = 4;
+  }
+
+  // Don't include the nal_unit_type
+  size_t header_length = nal_start_code_length + 1;
+
+  // Check if there is at least one byte of payload data
+  if (st->unit.size() <= header_length + 1)
+    return -1;
+
+  // Calculate the starting position of the payload
+  size_t payload_start = header_length + 1;
+
+  // Calculate the number of bytes to in the payload
+  return st->unit.size() - payload_start;
+}
+
+ssize_t hstream_get(void *stream, char *dest, size_t length) {
   hstream *st = (hstream *)stream;
   if (!st || st->unit.empty() || !dest || length <= 0)
     return -1;
@@ -139,7 +165,7 @@ int hstream_get(void *stream, char *dest, size_t length) {
   return payload_length;
 }
 
-int hstream_set(void *stream, char *src, size_t length) {
+ssize_t hstream_set(void *stream, char *src, size_t length) {
   hstream *st = (hstream *)stream;
   if (!st || st->unit.empty() || !src || length <= 0)
     return -1;
@@ -164,5 +190,5 @@ int hstream_set(void *stream, char *src, size_t length) {
   // Insert the new payload into the unit buffer
   st->unit.insert(st->unit.end(), src, src + length);
 
-  return 0;
+  return length;
 }
