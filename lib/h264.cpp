@@ -4,9 +4,6 @@
 
 #include "h264.h"
 
-#define NAL_UNIT_TYPE_I 5
-#define NAL_UNIT_TYPE_MASK 0x1F
-
 struct hstream {
   std::ifstream input;
   std::ofstream output;
@@ -67,7 +64,7 @@ std::vector<char> emul_prev_dec(std::vector<char> &enc) {
         zero_count = 0;
         continue;
       }
-    } else if (c == 0) {
+    } else if (c == 0x00) {
       zero_count = std::min(zero_count + 1, 2);
     } else {
       zero_count = 0;
@@ -117,9 +114,8 @@ int hstream_next(void *stream) {
   if (!found_nal_start)
     return -1; // End of file or no NAL unit found
 
-  std::vector<char> payload;
-
   // Read the rest of the NAL unit
+  std::vector<char> payload;
   while (st->input.get(c)) {
     payload.push_back(c);
 
@@ -142,7 +138,6 @@ int hstream_next(void *stream) {
   }
 
   st->body = emul_prev_dec(payload);
-
   return 0;
 }
 
@@ -162,7 +157,7 @@ int hstream_type(void *stream) {
     return -1;
 
   unsigned char nal_header = st->head[nal_start_code_length];
-  unsigned char nal_unit_type = nal_header & NAL_UNIT_TYPE_MASK;
+  unsigned char nal_unit_type = nal_header & 0x1F;
 
   return nal_unit_type;
 }
@@ -180,12 +175,8 @@ ssize_t hstream_get(void *stream, char *dest, size_t length) {
   if (!st || st->body.empty() || !dest || length <= 0)
     return -1;
 
-  // Calculate the number of bytes to copy
   size_t amount = std::min(st->body.size(), length);
-
-  // Copy the payload to the destination buffer
   std::copy(st->body.begin(), st->body.begin() + amount, dest);
-
   return amount;
 }
 
@@ -194,11 +185,7 @@ ssize_t hstream_set(void *stream, char *src, size_t length) {
   if (!st || st->body.empty() || !src || length <= 0)
     return -1;
 
-  // Clear any existing payload data in the unit buffer
   st->body.clear();
-
-  // Insert the new payload into the unit buffer
   st->body.insert(st->body.end(), src, src + length);
-
   return length;
 }
