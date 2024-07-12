@@ -10,7 +10,8 @@
 struct hstream {
   std::ifstream input;
   std::ofstream output;
-  std::vector<char> unit;
+
+  std::vector<char> head, body;
 };
 
 void *hstream_new(char *infile, char *outfile) {
@@ -29,15 +30,69 @@ int hstream_del(void *stream) {
   return 0;
 }
 
+std::vector<char> emul_prev_enc(std::vector<char> &dec) {
+  std::vector<char> ret;
+
+  int zero_count = 0;
+  for (char c : dec) {
+    if (c >= 0x01 && c <= 0x03) {
+      if (zero_count == 2) {
+        ret.push_back(0x03);
+        zero_count = 0;
+      }
+    } else if (c == 0x00) {
+      if (zero_count == 2) {
+        ret.push_back(0x03);
+        zero_count = 1;
+      } else {
+        zero_count = std::min(zero_count + 1, 2);
+      }
+    } else {
+      zero_count = 0;
+    }
+
+    ret.push_back(c);
+  }
+
+  return ret;
+}
+
+std::vector<char> emul_prev_dec(std::vector<char> &enc) {
+  std::vector<char> ret;
+
+  int zero_count = 0;
+  for (char c : enc) {
+    if (c == 0x03) {
+      if (zero_count == 2) {
+        zero_count = 0;
+        continue;
+      }
+    } else if (c == 0) {
+      zero_count = std::min(zero_count + 1, 2);
+    } else {
+      zero_count = 0;
+    }
+
+    ret.push_back(c);
+  }
+
+  return ret;
+}
+
 int hstream_next(void *stream) {
   hstream *st = (hstream *)stream;
   if (!st || !st->input.is_open() || !st->output.is_open())
     return -1;
 
   // If the current NAL unit is not empty, append it to the output file
-  if (!st->unit.empty()) {
-    st->output.write(st->unit.data(), st->unit.size());
-    st->unit.clear();
+  if (!st->head.empty()) {
+    std::vector<char> encoded = emul_prev_enc(st->body);
+
+    st->output.write(st->head.data(), st->head.size());
+    st->output.write(encoded.data(), encoded.size());
+
+    st->head.clear();
+    st->body.clear();
   }
 
   // Read the next NAL unit from the input file
@@ -46,61 +101,67 @@ int hstream_next(void *stream) {
 
   // Read the input file byte by byte
   while (st->input.get(c)) {
-    st->unit.push_back(c);
+    st->head.push_back(c);
+
+    if (found_nal_start)
+      break;
 
     // Check for the NAL unit start code (0x000001 or 0x00000001)
-    size_t n = st->unit.size();
-    if (n >= 3 && st->unit[n - 3] == 0x00 && st->unit[n - 2] == 0x00 &&
-        st->unit[n - 1] == 0x01) {
+    size_t n = st->head.size();
+    if (n >= 3 && st->head[n - 3] == 0x00 && st->head[n - 2] == 0x00 &&
+        st->head[n - 1] == 0x01) {
       found_nal_start = true;
-      break;
     }
   }
 
   if (!found_nal_start)
     return -1; // End of file or no NAL unit found
 
+  std::vector<char> payload;
+
   // Read the rest of the NAL unit
   while (st->input.get(c)) {
-    st->unit.push_back(c);
+    payload.push_back(c);
 
     // Check for the next NAL unit start code
-    size_t n = st->unit.size();
-    if (n >= 3 && st->unit[n - 3] == 0x00 && st->unit[n - 2] == 0x00 &&
-        st->unit[n - 1] == 0x01) {
+    size_t n = payload.size();
+    if (n >= 3 && payload[n - 3] == 0x00 && payload[n - 2] == 0x00 &&
+        payload[n - 1] == 0x01) {
       // Remove the start code of the next NAL unit from the current NAL unit
-      st->unit.erase(st->unit.end() - 3, st->unit.end());
+      payload.erase(payload.end() - 3, payload.end());
       st->input.seekg(-3, std::ios::cur);
       break;
     }
-    if (n >= 4 && st->unit[n - 4] == 0x00 && st->unit[n - 3] == 0x00 &&
-        st->unit[n - 2] == 0x00 && st->unit[n - 1] == 0x01) {
+    if (n >= 4 && payload[n - 4] == 0x00 && payload[n - 3] == 0x00 &&
+        payload[n - 2] == 0x00 && payload[n - 1] == 0x01) {
       // Remove the start code of the next NAL unit from the current NAL unit
-      st->unit.erase(st->unit.end() - 4, st->unit.end());
+      payload.erase(payload.end() - 4, payload.end());
       st->input.seekg(-4, std::ios::cur);
       break;
     }
   }
+
+  st->body = emul_prev_dec(payload);
 
   return 0;
 }
 
 int hstream_type(void *stream) {
   hstream *st = (hstream *)stream;
-  if (!st || st->unit.empty())
+  if (!st || st->head.empty())
     return -1;
 
   // Find the NAL unit type from the first byte after the start code
   size_t nal_start_code_length = 3;
-  if (st->unit.size() > 4 && st->unit[0] == 0x00 && st->unit[1] == 0x00 &&
-      st->unit[2] == 0x00 && st->unit[3] == 0x01) {
+  if (st->head.size() > 4 && st->head[0] == 0x00 && st->head[1] == 0x00 &&
+      st->head[2] == 0x00 && st->head[3] == 0x01) {
     nal_start_code_length = 4;
   }
 
-  if (st->unit.size() <= nal_start_code_length)
+  if (st->head.size() <= nal_start_code_length)
     return -1;
 
-  unsigned char nal_header = st->unit[nal_start_code_length];
+  unsigned char nal_header = st->head[nal_start_code_length];
   unsigned char nal_unit_type = nal_header & NAL_UNIT_TYPE_MASK;
 
   return nal_unit_type;
@@ -108,87 +169,36 @@ int hstream_type(void *stream) {
 
 ssize_t hstream_size(void *stream) {
   hstream *st = (hstream *)stream;
-  if (!st || st->unit.empty())
+  if (!st || st->head.empty())
     return -1;
 
-  // Determine the NAL start code length
-  size_t nal_start_code_length = 3;
-  if (st->unit.size() > 4 && st->unit[0] == 0x00 && st->unit[1] == 0x00 &&
-      st->unit[2] == 0x00 && st->unit[3] == 0x01) {
-    nal_start_code_length = 4;
-  }
-
-  // Don't include the nal_unit_type
-  size_t header_length = nal_start_code_length + 1;
-
-  // Check if there is at least one byte of payload data
-  if (st->unit.size() <= header_length + 1)
-    return -1;
-
-  // Calculate the starting position of the payload
-  size_t payload_start = header_length + 1;
-
-  // Calculate the number of bytes to in the payload
-  return st->unit.size() - payload_start;
+  return st->body.size();
 }
 
 ssize_t hstream_get(void *stream, char *dest, size_t length) {
   hstream *st = (hstream *)stream;
-  if (!st || st->unit.empty() || !dest || length <= 0)
+  if (!st || st->body.empty() || !dest || length <= 0)
     return -1;
-
-  // Determine the NAL start code length
-  size_t nal_start_code_length = 3;
-  if (st->unit.size() > 4 && st->unit[0] == 0x00 && st->unit[1] == 0x00 &&
-      st->unit[2] == 0x00 && st->unit[3] == 0x01) {
-    nal_start_code_length = 4;
-  }
-
-  // Preserve the nal_unit_type
-  size_t header_length = nal_start_code_length + 1;
-
-  // Check if there is at least one byte of payload data
-  if (st->unit.size() <= header_length + 1)
-    return -1;
-
-  // Calculate the starting position of the payload
-  size_t payload_start = header_length + 1;
 
   // Calculate the number of bytes to copy
-  size_t payload_length = std::min(st->unit.size() - payload_start, length);
+  size_t amount = std::min(st->body.size(), length);
 
   // Copy the payload to the destination buffer
-  auto start = st->unit.begin() + payload_start;
-  auto stop = start + payload_length;
-  std::copy(start, stop, dest);
+  std::copy(st->body.begin(), st->body.begin() + amount, dest);
 
-  return payload_length;
+  return amount;
 }
 
 ssize_t hstream_set(void *stream, char *src, size_t length) {
   hstream *st = (hstream *)stream;
-  if (!st || st->unit.empty() || !src || length <= 0)
-    return -1;
-
-  // Determine the NAL start code length
-  size_t nal_start_code_length = 3;
-  if (st->unit.size() > 4 && st->unit[0] == 0x00 && st->unit[1] == 0x00 &&
-      st->unit[2] == 0x00 && st->unit[3] == 0x01) {
-    nal_start_code_length = 4;
-  }
-
-  // Preserve the nal_unit_type
-  size_t header_length = nal_start_code_length + 1;
-
-  // Ensure the provided length does not exceed the maximum allowed
-  if (length > st->unit.capacity() - header_length)
+  if (!st || st->body.empty() || !src || length <= 0)
     return -1;
 
   // Clear any existing payload data in the unit buffer
-  st->unit.resize(header_length);
+  st->body.clear();
 
   // Insert the new payload into the unit buffer
-  st->unit.insert(st->unit.end(), src, src + length);
+  st->body.insert(st->body.end(), src, src + length);
 
   return length;
 }
