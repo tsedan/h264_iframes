@@ -16,8 +16,8 @@ struct hstream {
 
 void *hstream_new(char *infile, char *outfile) {
   hstream *st = new hstream;
-  st->input = std::ifstream(infile, std::ios::in);
-  st->output = std::ofstream(outfile, std::ios::out);
+  st->input = std::ifstream(infile, std::ios::in | std::ios::binary);
+  st->output = std::ofstream(outfile, std::ios::out | std::ios::binary);
   return st;
 }
 
