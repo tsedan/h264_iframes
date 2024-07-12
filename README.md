@@ -1,2 +1,3 @@
 # h264-iframes
-Library for messing with the i-frames of H.264 video
+
+C-compatible library to aid in reading and manipulating streaming H.264 data
