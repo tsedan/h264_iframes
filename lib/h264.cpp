@@ -14,7 +14,8 @@ struct hstream {
 void *hstream_new(char *infile, char *outfile) {
   hstream *st = new hstream;
   st->input = std::ifstream(infile, std::ios::in | std::ios::binary);
-  st->output = std::ofstream(outfile, std::ios::out | std::ios::binary);
+  if (outfile)
+    st->output = std::ofstream(outfile, std::ios::out | std::ios::binary);
   return st;
 }
 
@@ -78,15 +79,17 @@ std::vector<char> emul_prev_dec(std::vector<char> &enc) {
 
 int hstream_next(void *stream) {
   hstream *st = (hstream *)stream;
-  if (!st || !st->input.is_open() || !st->output.is_open())
+  if (!st || !st->input.is_open())
     return -1;
 
   // If the current NAL unit is not empty, append it to the output file
   if (!st->head.empty()) {
     std::vector<char> encoded = emul_prev_enc(st->body);
 
-    st->output.write(st->head.data(), st->head.size());
-    st->output.write(encoded.data(), encoded.size());
+    if (st->output.is_open()) {
+      st->output.write(st->head.data(), st->head.size());
+      st->output.write(encoded.data(), encoded.size());
+    }
 
     st->head.clear();
     st->body.clear();
