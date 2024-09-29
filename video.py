@@ -1,4 +1,5 @@
 import av
+import lzma
 import pathlib
 import subprocess
 import ctypes
@@ -42,9 +43,9 @@ def encode(
         img = frame.to_image()
 
         if num_frames % interval == 0:
-            encoded = encode_image(img)
+            encoded = lzma.compress(encode_image(img))
             frame_encodings.append(encoded)
-            img = decode_image(encoded)
+            img = decode_image(lzma.decompress(encoded))
 
         res = av.VideoFrame.from_image(img)
         for packet in out_stream.encode(res):
@@ -143,7 +144,7 @@ def decode(
             if read == -1 or read != size:
                 panic("Error on h264 get")
 
-            img = decode_image(b"".join(payload))
+            img = decode_image(lzma.decompress(b"".join(payload)))
 
             vid_path = desire(dec_path.with_suffix(".mp4"))
 
